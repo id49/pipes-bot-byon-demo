@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BYON Demo — Pipes.bot
 
-## Getting Started
+Demo app for the Pipes.bot **Bring Your Own Number (BYON)** feature. Partners select an identity, complete WhatsApp Embedded Signup via Pipes.bot, then test API endpoints for templates and messaging.
 
-First, run the development server:
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Fill in `.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Description |
+|---|---|
+| `PIPES_APP_API_KEY` | App API key (`ak_` prefixed) |
+| `PIPES_APP_SLUG` | App slug used to construct the onboarding redirect URL |
+| `PARTNER_REDIRECT_URL` | Where users return after onboarding (e.g. `http://localhost:3000/dashboard`) |
+| `PIPES_API_BASE_URL` | API base URL (defaults to `https://api.pipes.bot`) |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm dev
+```
 
-## Learn More
+## How it works
 
-To learn more about Next.js, take a look at the following resources:
+### 1. Partner Selection (`/`)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The home page generates 5 random partner IDs. Clicking one triggers a server action that:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Creates a token via `POST /v1/apps/token` with the partner ID as metadata
+2. Redirects to `https://app.pipes.bot/apps/<slug>?token=<token>` for WhatsApp Embedded Signup
 
-## Deploy on Vercel
+### 2. Dashboard (`/dashboard`)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+After onboarding, the user lands on the dashboard with their pool number ID. Three operations are available:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Get Templates** — fetches templates for the pool number
+- **Send Template** — sends a WhatsApp template message (template name, language code, recipient)
+- **Send Message** — sends a freeform text message to a recipient
+
+All API calls are proxied through server actions — API keys never reach the client.
+
+## Tech stack
+
+- Next.js 16 (App Router, Server Actions)
+- Tailwind CSS 4
+- No database, no auth — lightweight demo only
