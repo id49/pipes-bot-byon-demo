@@ -2,10 +2,105 @@
 
 import { useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
-import { getTemplates, sendTemplate, sendMessage } from "./actions";
+import {
+  getTemplates,
+  sendTemplate,
+  sendMessage,
+  sendPassthrough,
+} from "./actions";
 import type { Template, SendTemplateComponent } from "@/lib/types";
 
 type Tab = "templates" | "sendTemplate" | "sendMessage";
+
+type MessageExample = {
+  label: string;
+  description: string;
+  body: (poolNumberId: string, to: string) => Record<string, unknown>;
+};
+
+const MESSAGE_EXAMPLES: MessageExample[] = [
+  {
+    label: "Plain Text",
+    description: "Simple text message with no buttons",
+    body: (poolNumberId, to) => ({
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      toNumber: to || "<TO_NUMBER>",
+      text: "Hi! Just checking in. Let us know if you need anything.",
+    }),
+  },
+  {
+    label: "Single CTA Button",
+    description: "Text message with a \"Shop Now\" link button",
+    body: (poolNumberId, to) => ({
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      to: to || "<TO_NUMBER>",
+      type: "interactive",
+      messaging_product: "whatsapp",
+      interactive: {
+        type: "cta_url",
+        body: {
+          text: "Hey! Check out our latest deals and new arrivals.",
+        },
+        action: {
+          name: "cta_url",
+          parameters: {
+            display_text: "Shop Now",
+            url: "https://example.com/shop",
+          },
+        },
+      },
+    }),
+  },
+  {
+    label: "Two Reply Buttons",
+    description: "Quick-reply message with Yes / No buttons",
+    body: (poolNumberId, to) => ({
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      to: to || "<TO_NUMBER>",
+      type: "interactive",
+      messaging_product: "whatsapp",
+      interactive: {
+        type: "button",
+        body: {
+          text: "Your order #1042 is ready for pickup. Would you like to confirm?",
+        },
+        action: {
+          buttons: [
+            { type: "reply", reply: { id: "confirm", title: "Yes, confirm" } },
+            { type: "reply", reply: { id: "reschedule", title: "Reschedule" } },
+          ],
+        },
+      },
+    }),
+  },
+  {
+    label: "Header + CTA",
+    description: "Message with a header, body text, and a link button",
+    body: (poolNumberId, to) => ({
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      to: to || "<TO_NUMBER>",
+      type: "interactive",
+      messaging_product: "whatsapp",
+      interactive: {
+        type: "cta_url",
+        header: {
+          type: "text",
+          text: "Appointment Reminder",
+        },
+        body: {
+          text: "You have an upcoming appointment on March 5 at 2:00 PM. View the details or reschedule online.",
+        },
+        action: {
+          name: "cta_url",
+          parameters: {
+            display_text: "Manage Appointment",
+            url: "https://example.com/appointments",
+          },
+        },
+      },
+    }),
+  },
+];
 
 const inputClass =
   "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500";
@@ -41,6 +136,7 @@ export default function DashboardClient() {
   // Send Message fields
   const [msgTo, setMsgTo] = useState("");
   const [msgText, setMsgText] = useState("");
+  const [msgExample, setMsgExample] = useState<number | null>(null);
 
   function resetTemplateState() {
     setTemplates([]);
@@ -109,6 +205,32 @@ export default function DashboardClient() {
   -d '${json}'`;
   }
 
+  function buildMessageCurlExample(): string {
+    if (msgExample !== null) {
+      const example = MESSAGE_EXAMPLES[msgExample];
+      const body = example.body(poolNumberId, msgTo);
+      const isInteractive = "type" in body && body.type === "interactive";
+      const endpoint = isInteractive
+        ? "https://api.pipes.bot/v1/messages/passthrough"
+        : "https://api.pipes.bot/v1/messages/app/send";
+      const json = JSON.stringify(body, null, 2);
+      return `curl -X POST ${endpoint} \\
+  -H "Authorization: Bearer <YOUR_API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '${json}'`;
+    }
+    const body = {
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      toNumber: msgTo || "<TO_NUMBER>",
+      text: msgText || "<MESSAGE_TEXT>",
+    };
+    const json = JSON.stringify(body, null, 2);
+    return `curl -X POST https://api.pipes.bot/v1/messages/app/send \\
+  -H "Authorization: Bearer <YOUR_API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '${json}'`;
+  }
+
   function buildComponents(): SendTemplateComponent[] {
     const components: SendTemplateComponent[] = [];
     for (const [compType, values] of Object.entries(templateVars)) {
@@ -144,7 +266,25 @@ export default function DashboardClient() {
           break;
         }
         case "sendMessage":
-          res = await sendMessage(poolNumberId, msgTo, msgText);
+          if (msgExample !== null) {
+            const example = MESSAGE_EXAMPLES[msgExample];
+            const body = example.body(poolNumberId, msgTo);
+            const isInteractive =
+              "type" in body && body.type === "interactive";
+            if (isInteractive) {
+              res = await sendPassthrough(
+                body as Record<string, unknown>
+              );
+            } else {
+              res = await sendMessage(
+                poolNumberId,
+                msgTo,
+                (body as { text: string }).text
+              );
+            }
+          } else {
+            res = await sendMessage(poolNumberId, msgTo, msgText);
+          }
           break;
       }
 
@@ -349,13 +489,65 @@ export default function DashboardClient() {
                 placeholder="To number (e.g. 15551234567)"
                 className={inputClass}
               />
-              <textarea
-                value={msgText}
-                onChange={(e) => setMsgText(e.target.value)}
-                placeholder="Message text"
-                rows={3}
-                className={inputClass}
-              />
+
+              {/* Example selector */}
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Examples
+                </p>
+                <div className="flex flex-col gap-2">
+                  {MESSAGE_EXAMPLES.map((ex, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() =>
+                        setMsgExample(msgExample === i ? null : i)
+                      }
+                      className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                        msgExample === i
+                          ? "border-zinc-400 bg-zinc-100 text-zinc-900 dark:border-zinc-500 dark:bg-zinc-800 dark:text-zinc-100"
+                          : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-600"
+                      }`}
+                    >
+                      <span className="font-medium">{ex.label}</span>
+                      <span className="ml-2 text-zinc-400 dark:text-zinc-500">
+                        — {ex.description}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {msgExample === null && (
+                <textarea
+                  value={msgText}
+                  onChange={(e) => setMsgText(e.target.value)}
+                  placeholder="Message text"
+                  rows={3}
+                  className={inputClass}
+                />
+              )}
+
+              {/* Curl example */}
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    cURL Example
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard.writeText(buildMessageCurlExample())
+                    }
+                    className="rounded px-2 py-0.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-zinc-700 dark:text-zinc-300">
+                  {buildMessageCurlExample()}
+                </pre>
+              </div>
             </>
           )}
         </div>

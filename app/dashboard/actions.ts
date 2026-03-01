@@ -58,6 +58,24 @@ export async function sendTemplate(
   }
 }
 
+export async function sendPassthrough(
+  body: Record<string, unknown>
+): Promise<ActionResult<SendMessageResponse>> {
+  try {
+    const data = await pipesApiFetch<SendMessageResponse>({
+      path: "/v1/messages/passthrough",
+      method: "POST",
+      body,
+    });
+    return { success: true, data };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Unknown error",
+    };
+  }
+}
+
 export async function sendMessage(
   poolNumberId: string,
   toNumber: string,
