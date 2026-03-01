@@ -6,13 +6,29 @@ export type CreateTokenResponse = {
   token: string;
 };
 
+export type TemplateComponent = {
+  type: "HEADER" | "BODY" | "FOOTER" | "BUTTONS";
+  format?: string;
+  text?: string;
+};
+
+export type TemplateParameter = {
+  type: "text";
+  text: string;
+};
+
+export type SendTemplateComponent = {
+  type: "header" | "body";
+  parameters: TemplateParameter[];
+};
+
 export type Template = {
   name: string;
   language: string;
   status: string;
   category: string;
   id: string;
-  components?: unknown[];
+  components?: TemplateComponent[];
 };
 
 export type GetTemplatesResponse = {

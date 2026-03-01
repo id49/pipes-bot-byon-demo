@@ -3,8 +3,18 @@
 import { useState, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { getTemplates, sendTemplate, sendMessage } from "./actions";
+import type { Template, SendTemplateComponent } from "@/lib/types";
 
 type Tab = "templates" | "sendTemplate" | "sendMessage";
+
+const inputClass =
+  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500";
+
+function getVariableCount(text: string | undefined): number {
+  if (!text) return 0;
+  const matches = text.match(/\{\{\d+\}\}/g);
+  return matches ? matches.length : 0;
+}
 
 export default function DashboardClient() {
   const searchParams = useSearchParams();
@@ -18,12 +28,99 @@ export default function DashboardClient() {
 
   // Send Template fields
   const [toNumber, setToNumber] = useState("");
-  const [templateName, setTemplateName] = useState("");
   const [languageCode, setLanguageCode] = useState("en_US");
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(
+    null
+  );
+  const [templateVars, setTemplateVars] = useState<
+    Record<string, string[]>
+  >({});
+  const [templatesFetched, setTemplatesFetched] = useState(false);
 
   // Send Message fields
   const [msgTo, setMsgTo] = useState("");
   const [msgText, setMsgText] = useState("");
+
+  function resetTemplateState() {
+    setTemplates([]);
+    setSelectedTemplate(null);
+    setTemplateVars({});
+    setTemplatesFetched(false);
+  }
+
+  function handleSelectTemplate(idx: number) {
+    const tmpl = templates[idx];
+    if (!tmpl) {
+      setSelectedTemplate(null);
+      setTemplateVars({});
+      return;
+    }
+    setSelectedTemplate(tmpl);
+    setLanguageCode(tmpl.language);
+
+    const vars: Record<string, string[]> = {};
+    for (const comp of tmpl.components ?? []) {
+      if (comp.type === "HEADER" || comp.type === "BODY") {
+        const count = getVariableCount(comp.text);
+        if (count > 0) {
+          vars[comp.type] = Array(count).fill("");
+        }
+      }
+    }
+    setTemplateVars(vars);
+  }
+
+  function handleFetchTemplates() {
+    if (!poolNumberId.trim()) return;
+    startTransition(async () => {
+      const res = await getTemplates(poolNumberId);
+      if (res.success) {
+        setTemplates(res.data.data);
+        setTemplatesFetched(true);
+        setSelectedTemplate(null);
+        setTemplateVars({});
+        setResult(null);
+      } else {
+        setResult(res.error);
+        setIsError(true);
+      }
+    });
+  }
+
+  function buildCurlExample(): string {
+    if (!selectedTemplate) return "";
+    const components = buildComponents();
+    const body = {
+      poolNumberId: poolNumberId || "<POOL_NUMBER_ID>",
+      to: toNumber || "<TO_NUMBER>",
+      type: "template",
+      messaging_product: "whatsapp",
+      template: {
+        name: selectedTemplate.name,
+        language: { code: languageCode },
+        ...(components.length ? { components } : {}),
+      },
+    };
+    const json = JSON.stringify(body, null, 2);
+    return `curl -X POST https://api.pipes.bot/v1/messages/passthrough \\
+  -H "Authorization: Bearer <YOUR_API_KEY>" \\
+  -H "Content-Type: application/json" \\
+  -d '${json}'`;
+  }
+
+  function buildComponents(): SendTemplateComponent[] {
+    const components: SendTemplateComponent[] = [];
+    for (const [compType, values] of Object.entries(templateVars)) {
+      if (values.some((v) => v.length > 0)) {
+        components.push({
+          type: compType.toLowerCase() as "header" | "body",
+          parameters: values.map((text) => ({ type: "text" as const, text })),
+        });
+      }
+    }
+    return components;
+  }
 
   function handleSubmit() {
     if (!poolNumberId.trim()) return;
@@ -34,25 +131,31 @@ export default function DashboardClient() {
         case "templates":
           res = await getTemplates(poolNumberId);
           break;
-        case "sendTemplate":
+        case "sendTemplate": {
+          if (!selectedTemplate) return;
+          const components = buildComponents();
           res = await sendTemplate(
             poolNumberId,
             toNumber,
-            templateName,
-            languageCode
+            selectedTemplate.name,
+            languageCode,
+            components.length ? components : undefined
           );
           break;
+        }
         case "sendMessage":
           res = await sendMessage(poolNumberId, msgTo, msgText);
           break;
       }
 
-      if (res.success) {
-        setResult(JSON.stringify(res.data, null, 2));
-        setIsError(false);
-      } else {
-        setResult(res.error);
-        setIsError(true);
+      if (res) {
+        if (res.success) {
+          setResult(JSON.stringify(res.data, null, 2));
+          setIsError(false);
+        } else {
+          setResult(res.error);
+          setIsError(true);
+        }
       }
     });
   }
@@ -85,7 +188,10 @@ export default function DashboardClient() {
             id="poolNumberId"
             type="text"
             value={poolNumberId}
-            onChange={(e) => setPoolNumberId(e.target.value)}
+            onChange={(e) => {
+              setPoolNumberId(e.target.value);
+              resetTemplateState();
+            }}
             placeholder="pn_..."
             className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
           />
@@ -117,22 +223,121 @@ export default function DashboardClient() {
                 value={toNumber}
                 onChange={(e) => setToNumber(e.target.value)}
                 placeholder="To number (e.g. 15551234567)"
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
+                className={inputClass}
               />
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                placeholder="Template name (e.g. hello_world)"
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
-              />
-              <input
-                type="text"
-                value={languageCode}
-                onChange={(e) => setLanguageCode(e.target.value)}
-                placeholder="Language code (default: en_US)"
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
-              />
+
+              {!templatesFetched ? (
+                <button
+                  onClick={handleFetchTemplates}
+                  disabled={isPending || !poolNumberId.trim()}
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                >
+                  {isPending ? "Fetching..." : "Fetch Templates"}
+                </button>
+              ) : (
+                <>
+                  <select
+                    value={
+                      selectedTemplate
+                        ? templates.indexOf(selectedTemplate).toString()
+                        : ""
+                    }
+                    onChange={(e) => {
+                      const idx = parseInt(e.target.value, 10);
+                      handleSelectTemplate(idx);
+                    }}
+                    className={inputClass}
+                  >
+                    <option value="" disabled>
+                      Select a template...
+                    </option>
+                    {templates.map((t, i) => (
+                      <option key={t.id} value={i.toString()}>
+                        {t.name} ({t.language}) — {t.status}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedTemplate && (
+                    <>
+                      {/* Component preview */}
+                      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                          Template Preview
+                        </p>
+                        {(selectedTemplate.components ?? []).map((comp, i) => (
+                          <div key={i} className="mt-1">
+                            <span className="text-xs font-semibold text-zinc-400 dark:text-zinc-500">
+                              {comp.type}
+                              {comp.format ? ` (${comp.format})` : ""}:
+                            </span>
+                            <p className="text-sm text-zinc-700 dark:text-zinc-300">
+                              {comp.text ?? "—"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Variable inputs */}
+                      {Object.entries(templateVars).map(
+                        ([compType, values]) => (
+                          <div key={compType} className="flex flex-col gap-2">
+                            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                              {compType} Variables
+                            </p>
+                            {values.map((val, vi) => (
+                              <input
+                                key={vi}
+                                type="text"
+                                value={val}
+                                onChange={(e) => {
+                                  setTemplateVars((prev) => {
+                                    const updated = { ...prev };
+                                    updated[compType] = [...prev[compType]];
+                                    updated[compType][vi] = e.target.value;
+                                    return updated;
+                                  });
+                                }}
+                                placeholder={`{{${vi + 1}}}`}
+                                className={inputClass}
+                              />
+                            ))}
+                          </div>
+                        )
+                      )}
+
+                      <input
+                        type="text"
+                        value={languageCode}
+                        onChange={(e) => setLanguageCode(e.target.value)}
+                        placeholder="Language code (default: en_US)"
+                        className={inputClass}
+                      />
+
+                      {/* Curl example */}
+                      <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+                        <div className="mb-2 flex items-center justify-between">
+                          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                            cURL Example
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              navigator.clipboard.writeText(buildCurlExample())
+                            }
+                            className="rounded px-2 py-0.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-700 dark:hover:text-zinc-200"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                        <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-zinc-700 dark:text-zinc-300">
+                          {buildCurlExample()}
+                        </pre>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             </>
           )}
           {activeTab === "sendMessage" && (
@@ -142,27 +347,38 @@ export default function DashboardClient() {
                 value={msgTo}
                 onChange={(e) => setMsgTo(e.target.value)}
                 placeholder="To number (e.g. 15551234567)"
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
+                className={inputClass}
               />
               <textarea
                 value={msgText}
                 onChange={(e) => setMsgText(e.target.value)}
                 placeholder="Message text"
                 rows={3}
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-zinc-500"
+                className={inputClass}
               />
             </>
           )}
         </div>
 
         {/* Submit */}
-        <button
-          onClick={handleSubmit}
-          disabled={isPending || !poolNumberId.trim()}
-          className="mt-4 w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
-        >
-          {isPending ? "Loading..." : "Submit"}
-        </button>
+        {activeTab !== "sendTemplate" && (
+          <button
+            onClick={handleSubmit}
+            disabled={isPending || !poolNumberId.trim()}
+            className="mt-4 w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            {isPending ? "Loading..." : "Submit"}
+          </button>
+        )}
+        {activeTab === "sendTemplate" && templatesFetched && selectedTemplate && (
+          <button
+            onClick={handleSubmit}
+            disabled={isPending || !poolNumberId.trim() || !toNumber.trim()}
+            className="mt-4 w-full rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            {isPending ? "Sending..." : "Send Template"}
+          </button>
+        )}
 
         {/* Result */}
         {result !== null && (

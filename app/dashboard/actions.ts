@@ -5,6 +5,7 @@ import type {
   ActionResult,
   GetTemplatesResponse,
   SendMessageResponse,
+  SendTemplateComponent,
 } from "@/lib/types";
 
 export async function getTemplates(
@@ -27,7 +28,8 @@ export async function sendTemplate(
   poolNumberId: string,
   to: string,
   templateName: string,
-  languageCode: string
+  languageCode: string,
+  components?: SendTemplateComponent[]
 ): Promise<ActionResult<SendMessageResponse>> {
   try {
     const data = await pipesApiFetch<SendMessageResponse>({
@@ -35,16 +37,15 @@ export async function sendTemplate(
       method: "POST",
       body: {
         poolNumberId,
-        message: {
-          messaging_product: "whatsapp",
-          to,
-          type: "template",
-          template: {
-            name: templateName,
-            language: {
-              code: languageCode,
-            },
+        to,
+        type: "template",
+        messaging_product: "whatsapp",
+        template: {
+          name: templateName,
+          language: {
+            code: languageCode,
           },
+          ...(components?.length ? { components } : {}),
         },
       },
     });
